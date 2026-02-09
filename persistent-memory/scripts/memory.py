@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight persistent memory CLI for this workspace.
 
-The system keeps a human-readable markdown log in `memories/` and a local
-SQLite index in `.memory/memory.db` for fast search.
+The system keeps a local SQLite index in `.memory/memory.db` for fast search.
 """
 
 from __future__ import annotations
