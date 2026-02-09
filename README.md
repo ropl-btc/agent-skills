@@ -11,17 +11,17 @@ This repository is where I publish practical skills I use in real workflows. The
 A lightweight persistent memory skill for local workspace agents.
 
 It provides:
-- Durable memory storage in Markdown + SQLite
-- Fast recall with search and ranking
+- Durable memory storage in local SQLite (`.memory/memory.db`)
+- Fast recall with search and hybrid ranking
 - Automatic reinforcement of recalled memories (`hits`, `last_seen_at`)
 - Simple CLI workflow for `init`, `sync`, `search`, `add`, `recent`, and `stats`
 
-This skill is inspired by the long-term memory behavior of Clawdbot/OpenClaw, adapted into a simpler, local-first approach that is easy to run and maintain.
+This skill is inspired by the long-term memory behavior of Clawdbot/OpenClaw, adapted into a simpler, local-first, database-only approach that is easy to run and maintain.
 
 ## Install
 
 ```bash
-npx skills add ropl-btc/agent-skills
+npx skills add ropl-btc/agent-skills --skill persistent-memory
 ```
 
 ## Roadmap

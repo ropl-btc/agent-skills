@@ -14,7 +14,6 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 
 def _detect_workspace_root() -> Path:
@@ -28,8 +27,6 @@ def _detect_workspace_root() -> Path:
 
 ROOT = _detect_workspace_root()
 DB_PATH = ROOT / ".memory" / "memory.db"
-MEMORIES_DIR = ROOT / "memories"
-ROOT_MEMORY_FILE = ROOT / "MEMORY.md"
 WEIGHT_RELEVANCE = 0.60
 WEIGHT_RECENCY = 0.20
 WEIGHT_USAGE = 0.10
@@ -145,32 +142,14 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _append_markdown_note(content: str, tags: str, source: str, created_at: str) -> Path:
-    """Append a note to the monthly markdown log file and return its path."""
-    MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.fromisoformat(created_at)
-    month_file = MEMORIES_DIR / f"{timestamp.strftime('%Y-%m')}.md"
-    date_prefix = timestamp.astimezone().strftime("%Y-%m-%d %H:%M")
-    tag_label = f" [{tags}]" if tags else ""
-    line = f"- {date_prefix}{tag_label} ({source}) {content.strip()}\n"
-
-    if not month_file.exists():
-        month_file.write_text(f"# {timestamp.strftime('%Y-%m')}\n\n", encoding="utf-8")
-
-    with month_file.open("a", encoding="utf-8") as handle:
-        handle.write(line)
-    return month_file
-
-
 def add_note(
     conn: sqlite3.Connection,
     *,
     content: str,
     tags: str,
     source: str,
-    append_markdown: bool = False,
 ) -> tuple[int | None, bool]:
-    """Insert a note and optionally append to markdown.
+    """Insert a note into the memory database.
 
     Returns (note_id, inserted) where inserted is False when deduplicated.
     """
@@ -195,41 +174,7 @@ def add_note(
     if inserted:
         row = conn.execute("SELECT id FROM notes WHERE content_hash = ?", (digest,)).fetchone()
         note_id = int(row["id"]) if row else None
-        if append_markdown:
-            _append_markdown_note(content, tags, source, created_at)
     return note_id, inserted
-
-
-def _extract_markdown_bullets(path: Path) -> Iterable[str]:
-    """Yield bullet list entries from a markdown file."""
-    if not path.exists():
-        return []
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [line[2:].strip() for line in lines if line.startswith("- ") and line[2:].strip()]
-
-
-def sync_markdown(conn: sqlite3.Connection) -> int:
-    """Import notes from MEMORY.md and memories/*.md into the index."""
-    files: list[Path] = []
-    if ROOT_MEMORY_FILE.exists():
-        files.append(ROOT_MEMORY_FILE)
-    if MEMORIES_DIR.exists():
-        files.extend(sorted(MEMORIES_DIR.glob("*.md")))
-
-    inserted_count = 0
-    for file in files:
-        source = f"sync:{file.relative_to(ROOT)}"
-        for bullet in _extract_markdown_bullets(file):
-            _, inserted = add_note(
-                conn,
-                content=bullet,
-                tags="",
-                source=source,
-                append_markdown=False,
-            )
-            if inserted:
-                inserted_count += 1
-    return inserted_count
 
 
 def _format_row(row: sqlite3.Row) -> str:
@@ -443,42 +388,9 @@ def _search_with_hybrid_ranking(
     return scored_rows[:limit]
 
 
-def _search_like(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
-    """Fallback search using LIKE when FTS5 is unavailable."""
-    term = f"%{query}%"
-    return conn.execute(
-        """
-        SELECT id, created_at, source, tags, content
-        FROM notes
-        WHERE content LIKE ? OR tags LIKE ? OR source LIKE ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (term, term, term, limit),
-    ).fetchall()
-
-
-def _search_fts(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
-    """Search with FTS5 and rank by bm25 score."""
-    return conn.execute(
-        """
-        SELECT n.id, n.created_at, n.source, n.tags, n.content, bm25(notes_fts) AS score
-        FROM notes_fts
-        JOIN notes n ON n.id = notes_fts.rowid
-        WHERE notes_fts MATCH ?
-        ORDER BY score
-        LIMIT ?
-        """,
-        (query, limit),
-    ).fetchall()
-
-
 def cmd_init(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
     """Handle the init command."""
     fts_available = init_db(conn)
-    MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-    if not ROOT_MEMORY_FILE.exists():
-        ROOT_MEMORY_FILE.write_text("# MEMORY\n\n", encoding="utf-8")
     print(f"initialized: {DB_PATH}")
     print(f"fts5: {'enabled' if fts_available else 'unavailable (LIKE fallback)'}")
 
@@ -491,7 +403,6 @@ def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
         content=args.content,
         tags=args.tags or "",
         source=args.source or "manual",
-        append_markdown=not args.no_markdown,
     )
     if inserted:
         print(f"added note id={note_id}")
@@ -500,10 +411,9 @@ def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
 
 
 def cmd_sync(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
-    """Handle the sync command."""
+    """Handle the sync command in database-only mode."""
     init_db(conn)
-    count = sync_markdown(conn)
-    print(f"sync complete: {count} new notes indexed")
+    print("sync complete: database-only mode (no external files to index)")
 
 
 def cmd_search(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
@@ -577,8 +487,6 @@ def cmd_stats(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
     print(f"latest_last_seen_at: {latest_seen or 'never'}")
     print(f"db: {DB_PATH}")
     print(f"fts5: {'enabled' if fts_available else 'unavailable (LIKE fallback)'}")
-    print(f"memory_file: {ROOT_MEMORY_FILE}")
-    print(f"memories_dir: {MEMORIES_DIR}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -593,11 +501,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("content", help="note content")
     add_parser.add_argument("--tags", default="", help="comma-separated tags")
     add_parser.add_argument("--source", default="manual", help="source label")
-    add_parser.add_argument(
-        "--no-markdown",
-        action="store_true",
-        help="do not append to monthly markdown log",
-    )
     add_parser.set_defaults(handler=cmd_add)
 
     sync_parser = subparsers.add_parser("sync", help="sync markdown notes into sqlite index")

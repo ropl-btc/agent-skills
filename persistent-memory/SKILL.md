@@ -27,7 +27,7 @@ Supported commands:
 - `pmem init`
 
 2. At the start of substantial tasks:
-- `pmem sync`
+- `pmem sync` (database-only health check)
 - `pmem search "<topic keywords>" --limit 8`
 
 3. When user explicitly says `remember` or when a durable preference/fact is learned:
@@ -51,6 +51,6 @@ Supported commands:
 
 ## Bootstrapping and Recovery
 
-- If `.memory/` or `MEMORY.md` is missing, run `pmem init`.
-- If indexing seems stale, run `pmem sync`.
+- If `.memory/` is missing, run `pmem init`.
+- `pmem sync` is a lightweight database-only check (no markdown import/export).
 - For command examples and quick troubleshooting, read `references/usage.md`.

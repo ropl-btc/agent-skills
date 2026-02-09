@@ -24,5 +24,5 @@
 ## Notes
 
 - `search` updates `hits` and `last_seen_at` for returned rows.
-- `sync` imports bullets from `MEMORY.md` and `memories/*.md`.
-- `.memory/memory.db` is the local index database.
+- `sync` is a database-only health check.
+- `.memory/memory.db` is the single source of truth.
