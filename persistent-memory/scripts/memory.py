@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import math
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -247,7 +248,37 @@ def _format_search_row(row: sqlite3.Row, score: float) -> str:
 
 def _query_tokens(query: str) -> set[str]:
     """Tokenize query text into lowercase words."""
-    return {token for token in query.lower().replace(",", " ").split() if token}
+    return {token for token in re.findall(r"[a-z0-9]+", query.lower()) if token}
+
+
+def _fts_query_from_text(query: str) -> str:
+    """Build a safe FTS5 query that handles punctuation-heavy input."""
+    tokens = sorted(_query_tokens(query))
+    if not tokens:
+        return ""
+    escaped = [token.replace('"', '""') for token in tokens]
+    return " OR ".join(f'"{token}"' for token in escaped)
+
+
+def _build_like_predicate(query: str) -> tuple[str, list[str]]:
+    """Build a broad LIKE predicate from query tokens plus raw query."""
+    tokens = sorted(_query_tokens(query))
+    terms: list[str] = []
+    if query.strip():
+        terms.append(query.strip())
+    for token in tokens:
+        if token not in terms:
+            terms.append(token)
+    if not terms:
+        terms = [query]
+
+    clauses: list[str] = []
+    params: list[str] = []
+    for term in terms:
+        clauses.append("(content LIKE ? OR tags LIKE ? OR source LIKE ?)")
+        pattern = f"%{term}%"
+        params.extend([pattern, pattern, pattern])
+    return " OR ".join(clauses), params
 
 
 def _tags_set(tags: str) -> set[str]:
@@ -364,7 +395,8 @@ def _search_with_hybrid_ranking(
     now_ts = datetime.now(timezone.utc)
     scored_rows: list[tuple[sqlite3.Row, float]] = []
 
-    if fts_available:
+    fts_query = _fts_query_from_text(query)
+    if fts_available and fts_query:
         try:
             rows = conn.execute(
                 """
@@ -377,30 +409,32 @@ def _search_with_hybrid_ranking(
                 ORDER BY bm25_score
                 LIMIT ?
                 """,
-                (query, candidate_limit),
+                (fts_query, candidate_limit),
             ).fetchall()
-            for row in rows:
-                score = _score_row(
-                    row=row,
-                    query=query,
-                    now_ts=now_ts,
-                    bm25_score=float(row["bm25_score"]),
-                )
-                scored_rows.append((row, score))
-            scored_rows.sort(key=lambda item: item[1], reverse=True)
-            return scored_rows[:limit]
+            if rows:
+                for row in rows:
+                    score = _score_row(
+                        row=row,
+                        query=query,
+                        now_ts=now_ts,
+                        bm25_score=float(row["bm25_score"]),
+                    )
+                    scored_rows.append((row, score))
+                scored_rows.sort(key=lambda item: item[1], reverse=True)
+                return scored_rows[:limit]
         except sqlite3.OperationalError:
             pass
 
+    where_clause, where_params = _build_like_predicate(query)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, created_at, source, tags, content, hits, last_seen_at
         FROM notes
-        WHERE content LIKE ? OR tags LIKE ? OR source LIKE ?
+        WHERE {where_clause}
         ORDER BY created_at DESC
         LIMIT ?
         """,
-        (f"%{query}%", f"%{query}%", f"%{query}%", candidate_limit),
+        [*where_params, candidate_limit],
     ).fetchall()
     for row in rows:
         score = _score_row(row=row, query=query, now_ts=now_ts, bm25_score=None)
