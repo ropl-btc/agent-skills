@@ -16,6 +16,16 @@
 .agents/skills/persistent-memory/scripts/pmem backfill-embeddings
 ```
 
+## Prune by Source
+
+```bash
+# prune all notes from a source
+.agents/skills/persistent-memory/scripts/pmem prune --source "smoke-test"
+
+# prune only old notes from a source
+.agents/skills/persistent-memory/scripts/pmem prune --source "temp-import" --older-than 30
+```
+
 ## Store Durable Memory
 
 ```bash

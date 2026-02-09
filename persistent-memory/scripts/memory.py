@@ -12,7 +12,7 @@ import hashlib
 import math
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -624,6 +624,47 @@ def cmd_backfill_embeddings(conn: sqlite3.Connection, args: argparse.Namespace) 
     print(f"embedded_notes: {count}")
 
 
+def cmd_prune(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
+    """Delete notes by source with optional age threshold in days."""
+    init_db(conn)
+    source = (args.source or "").strip()
+    if not source:
+        raise ValueError("--source is required")
+
+    params: list[Any] = [source]
+    where = "source = ?"
+    cutoff = None
+    if args.older_than is not None:
+        days = max(0, int(args.older_than))
+        cutoff = (
+            datetime.now(timezone.utc).replace(microsecond=0)
+            - timedelta(days=days)
+        ).isoformat()
+        where += " AND created_at < ?"
+        params.append(cutoff)
+
+    rows = conn.execute(
+        f"SELECT id FROM notes WHERE {where}",
+        params,
+    ).fetchall()
+    note_ids = [int(row["id"]) for row in rows]
+    if note_ids:
+        conn.execute(
+            f"DELETE FROM memory_embeddings WHERE note_id IN ({','.join(['?'] * len(note_ids))})",
+            note_ids,
+        )
+        conn.execute(
+            f"DELETE FROM notes WHERE id IN ({','.join(['?'] * len(note_ids))})",
+            note_ids,
+        )
+    conn.commit()
+    print(f"pruned_notes: {len(note_ids)}")
+    print(f"source: {source}")
+    if cutoff is not None:
+        print(f"older_than_days: {args.older_than}")
+        print(f"cutoff: {cutoff}")
+
+
 def cmd_search(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
     """Handle the search command."""
     fts_available = init_db(conn)
@@ -738,6 +779,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backfill_parser.add_argument("--batch", type=int, default=500, help="max notes per run")
     backfill_parser.set_defaults(handler=cmd_backfill_embeddings)
+
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="delete notes by source, optionally older than N days",
+    )
+    prune_parser.add_argument("--source", required=True, help="exact source label to delete")
+    prune_parser.add_argument(
+        "--older-than",
+        type=int,
+        default=None,
+        help="delete only notes older than this many days",
+    )
+    prune_parser.set_defaults(handler=cmd_prune)
 
     search_parser = subparsers.add_parser("search", help="search memory notes")
     search_parser.add_argument("query", help="search query")

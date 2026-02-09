@@ -18,6 +18,7 @@ Supported commands:
 - `sync` (database-only health check)
 - `cleanup-legacy`
 - `backfill-embeddings --batch 500`
+- `prune --source "<label>" [--older-than <days>]`
 - `search "<query>" --limit 8`
 - `add "<memory text>" --tags "<comma,tags>" --source "assistant"`
 - `recent --limit 10`
