@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Lightweight persistent memory CLI for this workspace.
 
-The system keeps a local SQLite index in `.memory/memory.db` for fast search.
+The system uses a local SQLite database (`.memory/memory.db`) as the single
+source of truth. Search uses lexical retrieval plus semantic retrieval.
 """
 
 from __future__ import annotations
@@ -13,6 +14,19 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+try:
+    import sqlite_vec  # type: ignore
+except Exception:
+    sqlite_vec = None
+
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+except Exception:
+    SentenceTransformer = None
 
 
 def _detect_workspace_root() -> Path:
@@ -26,10 +40,16 @@ def _detect_workspace_root() -> Path:
 
 ROOT = _detect_workspace_root()
 DB_PATH = ROOT / ".memory" / "memory.db"
-WEIGHT_RELEVANCE = 0.60
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+WEIGHT_LEXICAL = 0.70
+WEIGHT_SEMANTIC = 0.30
 WEIGHT_RECENCY = 0.20
-WEIGHT_USAGE = 0.10
 WEIGHT_TAG = 0.10
+
+_EMBEDDER: Any = None
+_SQLITE_VEC_STATUS: str | None = None
+_SEMANTIC_BACKEND_NOTICE_SHOWN = False
 
 
 def utc_now() -> str:
@@ -54,6 +74,30 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _init_sqlite_vec(conn: sqlite3.Connection) -> bool:
+    """Attempt to initialize sqlite-vec and return availability."""
+    global _SQLITE_VEC_STATUS
+    if _SQLITE_VEC_STATUS is not None:
+        return _SQLITE_VEC_STATUS == "sqlite-vec"
+
+    if sqlite_vec is None:
+        _SQLITE_VEC_STATUS = "python-cosine-fallback"
+        return False
+    try:
+        sqlite_vec.load(conn)
+        _SQLITE_VEC_STATUS = "sqlite-vec"
+        return True
+    except Exception:
+        _SQLITE_VEC_STATUS = "python-cosine-fallback"
+        return False
+
+
+def semantic_backend(conn: sqlite3.Connection) -> str:
+    """Return active semantic backend label."""
+    _init_sqlite_vec(conn)
+    return _SQLITE_VEC_STATUS or "python-cosine-fallback"
+
+
 def init_db(conn: sqlite3.Connection) -> bool:
     """Create schema and return whether FTS5 indexing is available."""
     conn.execute(
@@ -71,10 +115,25 @@ def init_db(conn: sqlite3.Connection) -> bool:
         """
     )
     conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+            note_id INTEGER PRIMARY KEY,
+            model TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS notes_created_at_idx ON notes(created_at DESC)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS notes_last_seen_at_idx ON notes(last_seen_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS memory_embeddings_updated_at_idx ON memory_embeddings(updated_at DESC)"
     )
 
     fts_available = True
@@ -141,6 +200,47 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _load_embedder() -> Any:
+    """Load and cache the sentence transformer model."""
+    global _EMBEDDER
+    if _EMBEDDER is not None:
+        return _EMBEDDER
+    if SentenceTransformer is None:
+        raise RuntimeError(
+            "sentence-transformers is not installed. Install with: pip install sentence-transformers"
+        )
+    _EMBEDDER = SentenceTransformer(EMBED_MODEL)
+    return _EMBEDDER
+
+
+def _embed_text(text: str) -> np.ndarray:
+    """Embed text and return a normalized float32 vector."""
+    model = _load_embedder()
+    vec = model.encode(text, normalize_embeddings=True)
+    arr = np.asarray(vec, dtype=np.float32)
+    norm = float(np.linalg.norm(arr))
+    if norm > 0:
+        arr = arr / norm
+    return arr
+
+
+def _upsert_embedding(conn: sqlite3.Connection, note_id: int, content: str) -> None:
+    """Generate and upsert semantic embedding for a note."""
+    vec = _embed_text(content)
+    conn.execute(
+        """
+        INSERT INTO memory_embeddings(note_id, model, dim, embedding, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(note_id) DO UPDATE SET
+            model = excluded.model,
+            dim = excluded.dim,
+            embedding = excluded.embedding,
+            updated_at = excluded.updated_at
+        """,
+        (note_id, EMBED_MODEL, int(vec.shape[0]), vec.tobytes(), utc_now()),
+    )
+
+
 def add_note(
     conn: sqlite3.Connection,
     *,
@@ -148,10 +248,7 @@ def add_note(
     tags: str,
     source: str,
 ) -> tuple[int | None, bool]:
-    """Insert a note into the memory database.
-
-    Returns (note_id, inserted) where inserted is False when deduplicated.
-    """
+    """Insert a note into the memory database."""
     content = content.strip()
     if not content:
         raise ValueError("content cannot be empty")
@@ -166,24 +263,26 @@ def add_note(
         """,
         (created_at, source.strip() or "manual", tags, content, digest),
     )
-    conn.commit()
 
     inserted = cursor.rowcount > 0
     note_id: int | None = None
     if inserted:
         row = conn.execute("SELECT id FROM notes WHERE content_hash = ?", (digest,)).fetchone()
         note_id = int(row["id"]) if row else None
+        if note_id is not None:
+            _upsert_embedding(conn, note_id, content)
+    conn.commit()
     return note_id, inserted
 
 
 def _format_row(row: sqlite3.Row) -> str:
-    """Format a search/recent row for CLI output."""
+    """Format a row for CLI output."""
     tags = f" [{row['tags']}]" if row["tags"] else ""
     return f"{row['id']:>4} | {row['created_at']} | {row['source']}{tags}\n      {row['content']}"
 
 
 def _format_search_row(row: sqlite3.Row, score: float) -> str:
-    """Format a search row with recall metadata and ranking score."""
+    """Format a search row with diagnostics."""
     base = _format_row(row)
     last_seen = row["last_seen_at"] or "never"
     hits = int(row["hits"] or 0)
@@ -196,7 +295,7 @@ def _query_tokens(query: str) -> set[str]:
 
 
 def _fts_query_from_text(query: str) -> str:
-    """Build a safe FTS5 query that handles punctuation-heavy input."""
+    """Build a safe FTS5 query."""
     tokens = sorted(_query_tokens(query))
     if not tokens:
         return ""
@@ -205,7 +304,7 @@ def _fts_query_from_text(query: str) -> str:
 
 
 def _build_like_predicate(query: str) -> tuple[str, list[str]]:
-    """Build a broad LIKE predicate from query tokens plus raw query."""
+    """Build broad LIKE predicate from query tokens + raw query."""
     tokens = sorted(_query_tokens(query))
     terms: list[str] = []
     if query.strip():
@@ -226,12 +325,12 @@ def _build_like_predicate(query: str) -> tuple[str, list[str]]:
 
 
 def _tags_set(tags: str) -> set[str]:
-    """Split tag CSV into a normalized set."""
+    """Split tag CSV into normalized set."""
     return {tag.strip().lower() for tag in tags.split(",") if tag.strip()}
 
 
 def _iso_age_days(iso_value: str | None, now_ts: datetime) -> float:
-    """Return age in days for an ISO timestamp; very large when missing/invalid."""
+    """Return age in days for ISO timestamp; very large when missing."""
     if not iso_value:
         return 3650.0
     try:
@@ -243,7 +342,7 @@ def _iso_age_days(iso_value: str | None, now_ts: datetime) -> float:
 
 
 def _recency_component(row: sqlite3.Row, now_ts: datetime) -> float:
-    """Compute recency score combining creation time and last-seen time."""
+    """Compute recency score from creation and last_seen timestamps."""
     created_days = _iso_age_days(row["created_at"], now_ts)
     seen_days = _iso_age_days(row["last_seen_at"], now_ts)
     created_score = math.exp(-created_days / 14.0)
@@ -251,15 +350,8 @@ def _recency_component(row: sqlite3.Row, now_ts: datetime) -> float:
     return max(created_score, seen_score)
 
 
-def _usage_component(hits: int) -> float:
-    """Compute usage score with capped log scaling."""
-    if hits <= 0:
-        return 0.0
-    return min(1.0, math.log1p(hits) / math.log(11.0))
-
-
 def _tag_component(query: str, tags: str) -> float:
-    """Compute tag overlap score based on query token intersection."""
+    """Compute tag overlap score."""
     q_tokens = _query_tokens(query)
     if not q_tokens:
         return 0.0
@@ -271,14 +363,14 @@ def _tag_component(query: str, tags: str) -> float:
 
 
 def _relevance_component_from_bm25(bm25_score: float | None) -> float:
-    """Map bm25 score to [0,1], where higher means more relevant."""
+    """Map bm25 score to [0,1], where larger means more relevant."""
     if bm25_score is None:
         return 0.0
     return 1.0 / (1.0 + max(0.0, bm25_score))
 
 
 def _relevance_component_like(query: str, row: sqlite3.Row) -> float:
-    """Estimate relevance in LIKE fallback mode."""
+    """Estimate lexical relevance in LIKE fallback."""
     text = f"{row['content']} {row['tags']} {row['source']}".lower()
     q_tokens = _query_tokens(query)
     if not q_tokens:
@@ -287,28 +379,108 @@ def _relevance_component_like(query: str, row: sqlite3.Row) -> float:
     return hits / len(q_tokens)
 
 
-def _score_row(
-    *,
-    row: sqlite3.Row,
-    query: str,
-    now_ts: datetime,
-    bm25_score: float | None,
-) -> float:
-    """Compute hybrid ranking score for a row."""
-    relevance = (
-        _relevance_component_from_bm25(bm25_score)
-        if bm25_score is not None
-        else _relevance_component_like(query, row)
-    )
-    recency = _recency_component(row, now_ts)
-    usage = _usage_component(int(row["hits"] or 0))
-    tag_match = _tag_component(query, row["tags"])
-    return (
-        WEIGHT_RELEVANCE * relevance
-        + WEIGHT_RECENCY * recency
-        + WEIGHT_USAGE * usage
-        + WEIGHT_TAG * tag_match
-    )
+def _lexical_candidates(
+    conn: sqlite3.Connection, query: str, limit: int, fts_available: bool
+) -> dict[int, float]:
+    """Return note_id -> lexical score map."""
+    candidate_limit = max(limit * 5, 30)
+    results: dict[int, float] = {}
+    fts_query = _fts_query_from_text(query)
+
+    if fts_available and fts_query:
+        try:
+            rows = conn.execute(
+                """
+                SELECT n.id, bm25(notes_fts) AS bm25_score
+                FROM notes_fts
+                JOIN notes n ON n.id = notes_fts.rowid
+                WHERE notes_fts MATCH ?
+                ORDER BY bm25_score
+                LIMIT ?
+                """,
+                (fts_query, candidate_limit),
+            ).fetchall()
+            if rows:
+                for row in rows:
+                    results[int(row["id"])] = _relevance_component_from_bm25(
+                        float(row["bm25_score"])
+                    )
+                return results
+        except sqlite3.OperationalError:
+            pass
+
+    where_clause, where_params = _build_like_predicate(query)
+    rows = conn.execute(
+        f"""
+        SELECT id, created_at, source, tags, content, hits, last_seen_at
+        FROM notes
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        [*where_params, candidate_limit],
+    ).fetchall()
+    for row in rows:
+        results[int(row["id"])] = _relevance_component_like(query, row)
+    return results
+
+
+def _semantic_candidates_python(conn: sqlite3.Connection, query: str, limit: int) -> dict[int, float]:
+    """Return note_id -> semantic score using Python cosine fallback."""
+    q_vec = _embed_text(query)
+    rows = conn.execute(
+        """
+        SELECT note_id, dim, embedding
+        FROM memory_embeddings
+        WHERE model = ?
+        """,
+        (EMBED_MODEL,),
+    ).fetchall()
+    scores: list[tuple[int, float]] = []
+    for row in rows:
+        note_id = int(row["note_id"])
+        dim = int(row["dim"])
+        emb = np.frombuffer(row["embedding"], dtype=np.float32, count=dim)
+        score = float(np.dot(q_vec, emb))
+        scores.append((note_id, score))
+    scores.sort(key=lambda item: item[1], reverse=True)
+    return {note_id: score for note_id, score in scores[: max(limit * 5, 30)]}
+
+
+def _semantic_candidates_sqlite_vec(
+    conn: sqlite3.Connection, query: str, limit: int
+) -> dict[int, float]:
+    """Return note_id -> semantic score using sqlite-vec SQL functions."""
+    q_vec = _embed_text(query)
+    q_blob = q_vec.astype(np.float32).tobytes()
+    rows = conn.execute(
+        """
+        SELECT note_id, (1.0 - vec_distance_cosine(embedding, ?)) AS score
+        FROM memory_embeddings
+        WHERE model = ?
+        ORDER BY vec_distance_cosine(embedding, ?) ASC
+        LIMIT ?
+        """,
+        (q_blob, EMBED_MODEL, q_blob, max(limit * 5, 30)),
+    ).fetchall()
+    return {int(row["note_id"]): float(row["score"]) for row in rows}
+
+
+def _semantic_candidates(conn: sqlite3.Connection, query: str, limit: int) -> tuple[dict[int, float], str]:
+    """Return semantic candidates and active backend label."""
+    global _SEMANTIC_BACKEND_NOTICE_SHOWN, _SQLITE_VEC_STATUS
+    backend = semantic_backend(conn)
+    if backend == "sqlite-vec":
+        try:
+            return _semantic_candidates_sqlite_vec(conn, query, limit), "sqlite-vec"
+        except Exception:
+            _SQLITE_VEC_STATUS = "python-cosine-fallback"
+            backend = "python-cosine-fallback"
+
+    if not _SEMANTIC_BACKEND_NOTICE_SHOWN and backend != "sqlite-vec":
+        print("semantic_backend_notice=python-cosine-fallback (sqlite-vec unavailable)")
+        _SEMANTIC_BACKEND_NOTICE_SHOWN = True
+    return _semantic_candidates_python(conn, query, limit), "python-cosine-fallback"
 
 
 def _mark_recalled(conn: sqlite3.Connection, note_ids: list[int]) -> None:
@@ -327,64 +499,56 @@ def _mark_recalled(conn: sqlite3.Connection, note_ids: list[int]) -> None:
     conn.commit()
 
 
-def _search_with_hybrid_ranking(
-    conn: sqlite3.Connection,
-    *,
-    query: str,
-    limit: int,
-    fts_available: bool,
-) -> list[tuple[sqlite3.Row, float]]:
-    """Search notes and return top rows scored by hybrid ranking."""
-    candidate_limit = max(limit * 5, 20)
+def _combined_search(
+    conn: sqlite3.Connection, query: str, limit: int, fts_available: bool
+) -> tuple[list[tuple[sqlite3.Row, float]], str]:
+    """Run hybrid lexical+semantic search and return scored rows + backend."""
     now_ts = datetime.now(timezone.utc)
-    scored_rows: list[tuple[sqlite3.Row, float]] = []
+    lexical = _lexical_candidates(conn, query, limit, fts_available)
+    semantic, backend = _semantic_candidates(conn, query, limit)
 
-    fts_query = _fts_query_from_text(query)
-    if fts_available and fts_query:
-        try:
-            rows = conn.execute(
-                """
-                SELECT
-                    n.id, n.created_at, n.source, n.tags, n.content, n.hits, n.last_seen_at,
-                    bm25(notes_fts) AS bm25_score
-                FROM notes_fts
-                JOIN notes n ON n.id = notes_fts.rowid
-                WHERE notes_fts MATCH ?
-                ORDER BY bm25_score
-                LIMIT ?
-                """,
-                (fts_query, candidate_limit),
-            ).fetchall()
-            if rows:
-                for row in rows:
-                    score = _score_row(
-                        row=row,
-                        query=query,
-                        now_ts=now_ts,
-                        bm25_score=float(row["bm25_score"]),
-                    )
-                    scored_rows.append((row, score))
-                scored_rows.sort(key=lambda item: item[1], reverse=True)
-                return scored_rows[:limit]
-        except sqlite3.OperationalError:
-            pass
+    note_ids = set(lexical.keys()) | set(semantic.keys())
+    if not note_ids:
+        return [], backend
 
-    where_clause, where_params = _build_like_predicate(query)
     rows = conn.execute(
         f"""
         SELECT id, created_at, source, tags, content, hits, last_seen_at
         FROM notes
-        WHERE {where_clause}
-        ORDER BY created_at DESC
-        LIMIT ?
+        WHERE id IN ({",".join(["?"] * len(note_ids))})
         """,
-        [*where_params, candidate_limit],
+        list(note_ids),
     ).fetchall()
-    for row in rows:
-        score = _score_row(row=row, query=query, now_ts=now_ts, bm25_score=None)
-        scored_rows.append((row, score))
-    scored_rows.sort(key=lambda item: item[1], reverse=True)
-    return scored_rows[:limit]
+    rows_by_id = {int(row["id"]): row for row in rows}
+
+    scored: list[tuple[sqlite3.Row, float]] = []
+    for note_id in note_ids:
+        row = rows_by_id.get(note_id)
+        if row is None:
+            continue
+        lexical_score = lexical.get(note_id, 0.0)
+        semantic_score = max(0.0, semantic.get(note_id, 0.0))
+        recency = _recency_component(row, now_ts)
+        tag_match = _tag_component(query, row["tags"])
+        score = (
+            WEIGHT_LEXICAL * lexical_score
+            + WEIGHT_SEMANTIC * semantic_score
+            + WEIGHT_RECENCY * recency
+            + WEIGHT_TAG * tag_match
+        )
+        scored.append((row, score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored[:limit], backend
+
+
+def _embedding_coverage(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Return (embedded_notes, total_notes)."""
+    total_row = conn.execute("SELECT COUNT(*) AS c FROM notes").fetchone()
+    embedded_row = conn.execute("SELECT COUNT(*) AS c FROM memory_embeddings").fetchone()
+    total = int(total_row["c"]) if total_row else 0
+    embedded = int(embedded_row["c"]) if embedded_row else 0
+    return embedded, total
 
 
 def cmd_init(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
@@ -392,6 +556,7 @@ def cmd_init(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
     fts_available = init_db(conn)
     print(f"initialized: {DB_PATH}")
     print(f"fts5: {'enabled' if fts_available else 'unavailable (LIKE fallback)'}")
+    print(f"semantic_backend: {semantic_backend(conn)}")
 
 
 def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
@@ -410,23 +575,64 @@ def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
 
 
 def cmd_sync(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
-    """Handle the sync command in database-only mode."""
+    """Handle sync in database-only mode."""
     init_db(conn)
+    embedded, total = _embedding_coverage(conn)
     print("sync complete: database-only mode (no external files to index)")
+    print(f"semantic_backend: {semantic_backend(conn)}")
+    print(f"embedding_coverage: {embedded}/{total}")
+
+
+def cmd_cleanup_legacy(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
+    """Delete legacy sync rows and related embeddings."""
+    init_db(conn)
+    rows = conn.execute("SELECT id FROM notes WHERE source LIKE 'sync:%'").fetchall()
+    note_ids = [int(row["id"]) for row in rows]
+    if note_ids:
+        conn.execute(
+            f"DELETE FROM memory_embeddings WHERE note_id IN ({','.join(['?'] * len(note_ids))})",
+            note_ids,
+        )
+        conn.execute(
+            f"DELETE FROM notes WHERE id IN ({','.join(['?'] * len(note_ids))})",
+            note_ids,
+        )
+    conn.commit()
+    print(f"deleted_legacy_notes: {len(note_ids)}")
+
+
+def cmd_backfill_embeddings(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
+    """Generate embeddings for notes missing them."""
+    init_db(conn)
+    limit = max(1, int(args.batch))
+    rows = conn.execute(
+        """
+        SELECT n.id, n.content
+        FROM notes n
+        LEFT JOIN memory_embeddings e ON e.note_id = n.id
+        WHERE e.note_id IS NULL
+        ORDER BY n.id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    count = 0
+    for row in rows:
+        _upsert_embedding(conn, int(row["id"]), str(row["content"]))
+        count += 1
+    conn.commit()
+    print(f"embedded_notes: {count}")
 
 
 def cmd_search(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
     """Handle the search command."""
     fts_available = init_db(conn)
-    scored = _search_with_hybrid_ranking(
-        conn,
-        query=args.query,
-        limit=args.limit,
-        fts_available=fts_available,
-    )
+    scored, backend = _combined_search(conn, args.query, args.limit, fts_available)
     if not scored:
         print("no matches")
+        print(f"semantic_backend={backend}")
         return
+
     note_ids = [int(row["id"]) for row, _ in scored]
     _mark_recalled(conn, note_ids)
     refreshed = conn.execute(
@@ -438,6 +644,7 @@ def cmd_search(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
         note_ids,
     ).fetchall()
     refreshed_by_id = {int(row["id"]): row for row in refreshed}
+    print(f"semantic_backend={backend}")
     for row, score in scored:
         current = refreshed_by_id[int(row["id"])]
         print(_format_search_row(current, score))
@@ -480,12 +687,26 @@ def cmd_stats(conn: sqlite3.Connection, _: argparse.Namespace) -> None:
     recalled_count = int(recalled_row["recalled_count"]) if recalled_row else 0
     avg_hits = float(recalled_row["avg_hits"]) if recalled_row else 0.0
     latest_seen = recalled_row["latest_seen"] if recalled_row else None
+    embedded, total = _embedding_coverage(conn)
+    legacy_row = conn.execute(
+        "SELECT COUNT(*) AS c FROM notes WHERE source LIKE 'sync:%'"
+    ).fetchone()
+    legacy_sync_rows = int(legacy_row["c"]) if legacy_row else 0
+
     print(f"notes: {count}")
     print(f"recalled_notes: {recalled_count}")
     print(f"avg_hits_recalled: {avg_hits:.2f}")
     print(f"latest_last_seen_at: {latest_seen or 'never'}")
+    print(f"embedded_notes: {embedded}")
+    print(f"embedding_model: {EMBED_MODEL}")
+    print(f"semantic_backend: {semantic_backend(conn)}")
+    print(f"legacy_sync_rows: {legacy_sync_rows}")
     print(f"db: {DB_PATH}")
     print(f"fts5: {'enabled' if fts_available else 'unavailable (LIKE fallback)'}")
+    if total == 0:
+        print("embedding_coverage: 0/0")
+    else:
+        print(f"embedding_coverage: {embedded}/{total}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -502,8 +723,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--source", default="manual", help="source label")
     add_parser.set_defaults(handler=cmd_add)
 
-    sync_parser = subparsers.add_parser("sync", help="sync markdown notes into sqlite index")
+    sync_parser = subparsers.add_parser("sync", help="database-only sync/health check")
     sync_parser.set_defaults(handler=cmd_sync)
+
+    clean_parser = subparsers.add_parser(
+        "cleanup-legacy",
+        help="remove legacy sync:* rows and related embeddings",
+    )
+    clean_parser.set_defaults(handler=cmd_cleanup_legacy)
+
+    backfill_parser = subparsers.add_parser(
+        "backfill-embeddings",
+        help="create embeddings for notes missing vectors",
+    )
+    backfill_parser.add_argument("--batch", type=int, default=500, help="max notes per run")
+    backfill_parser.set_defaults(handler=cmd_backfill_embeddings)
 
     search_parser = subparsers.add_parser("search", help="search memory notes")
     search_parser.add_argument("query", help="search query")
