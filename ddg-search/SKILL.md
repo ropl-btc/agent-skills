@@ -23,6 +23,7 @@ This skill exists to make fallback web search simple and low-noise instead of re
 
 Prefer the skill-local script and a skill-local virtual environment over any global CLI install.
 Treat `.venv` as generated local state, not part of the skill itself.
+If the installer drops skill-local dotfiles, the bootstrap script recreates `.gitignore` automatically.
 
 Bootstrap the local environment:
 

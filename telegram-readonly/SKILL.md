@@ -23,6 +23,7 @@ This skill exists because Telegram Bot API is the wrong tool for reading a real 
 Prefer the skill-local script and a skill-local virtual environment over any global CLI install.
 Prefer saved Telegram config over shell-exported environment variables once setup is complete.
 Treat `.venv` as generated local state, not part of the skill itself.
+If the installer drops skill-local dotfiles, the bootstrap script recreates `.gitignore` automatically.
 
 Bootstrap the local environment:
 
