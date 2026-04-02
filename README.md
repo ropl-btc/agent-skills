@@ -50,6 +50,7 @@ Each skill is self-contained:
 - `references/`: optional docs or links
 
 Some skills may also include skill-specific generated local state such as `.venv/`. Those should generally not be committed.
+The `skills` installer drops dotfiles when installing skills, so skill-local `.gitignore` files should not be relied on as part of the installed skill surface.
 
 ## Using A Skill
 
