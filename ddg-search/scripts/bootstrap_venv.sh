@@ -4,6 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$SKILL_DIR/.venv"
+GITIGNORE_PATH="$SKILL_DIR/.gitignore"
+
+if [ ! -f "$GITIGNORE_PATH" ]; then
+  cat >"$GITIGNORE_PATH" <<'EOF'
+/.venv/
+__pycache__/
+EOF
+fi
 
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
