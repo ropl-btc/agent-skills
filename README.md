@@ -1,29 +1,68 @@
 # Agent Skills
 
-A collection of useful AI agent skills by Robin.
+A small collection of practical AI agent skills.
 
-This repository is where I publish practical skills I use in real workflows. The goal is simple: reusable skills that are easy to install and actually useful in day-to-day execution.
+This repo is now a simple multi-skill repository: each top-level folder is a skill with its own `SKILL.md`, `scripts/`, and optional `references/` or other support files.
 
-## Current Skill
+## Skills
 
 ### `persistent-memory`
 
-A lightweight persistent memory skill for local workspace agents.
+Local persistent memory workflow for agents.
 
-It provides:
-- Durable memory storage in local SQLite (`.memory/memory.db`)
-- Fast recall with search and hybrid ranking
-- Automatic reinforcement of recalled memories (`hits`, `last_seen_at`)
-- Simple CLI workflow for `init`, `sync`, `search`, `add`, `recent`, and `stats`
+- SQLite-backed memory storage and retrieval
+- helper commands for `init`, `search`, `add`, `recent`, and related maintenance
+- best for agents that want a database-backed memory layer inside one workspace
 
-This skill is inspired by the long-term memory behavior of Clawdbot/OpenClaw, adapted into a simpler, local-first, database-only approach that is easy to run and maintain.
+### `telegram-readonly`
 
-## Install
+Read-only access to a personal Telegram account via Telethon/MTProto.
 
-```bash
-npx skills add ropl-btc/agent-skills --skill persistent-memory
-```
+- list dialogs
+- read recent messages from a chat
+- search messages
+- inspect unread chats and DMs
+- uses a skill-local bootstrap flow and stores auth state in `~/.config/telegram-readonly/config.json`
 
-## Roadmap
+### `ddg-search`
 
-I’ll keep adding more skills here as I create and refine them.
+Lightweight DuckDuckGo search as a no-key fallback or second source.
+
+- text, news, image, and video search
+- instant-answer lookups
+- DuckDuckGo bang resolution
+- local script-based skill with a skill-local bootstrap flow
+
+### `twitterapi-io`
+
+Read-only Twitter/X data access via `twitterapi.io`.
+
+- fetch tweets, users, timelines, replies, quote tweets, thread context, mentions, and search results
+- local script-based skill, no global CLI required
+- stores API key in `~/.config/twitterapi-io/config.json`
+
+## Repo Layout
+
+Each skill is self-contained:
+
+- `SKILL.md`: agent-facing instructions
+- `scripts/`: local entrypoints and helpers
+- `references/`: optional docs or links
+
+Some skills may also include skill-specific generated local state such as `.venv/`. Those should generally not be committed.
+
+## Using A Skill
+
+Open the skill folder and follow its `SKILL.md`.
+
+Examples:
+
+- [persistent-memory](persistent-memory/SKILL.md)
+- [ddg-search](ddg-search/SKILL.md)
+- [telegram-readonly](telegram-readonly/SKILL.md)
+- [twitterapi-io](twitterapi-io/SKILL.md)
+
+## Notes
+
+- The skills in this repo are optimized for real agent workflows, not polished end-user CLIs.
+- Keep changes minimal and keep each skill self-contained.
