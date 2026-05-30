@@ -8,6 +8,7 @@ import subprocess
 import stat
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,21 +19,23 @@ BOOTSTRAP_SCRIPT = SCRIPT_DIR / "bootstrap_venv.sh"
 
 
 def maybe_reexec_local_venv() -> None:
-    if os.getenv("TELEGRAM_READONLY_VENV_REEXEC") == "1":
+    if os.getenv("TELEGRAM_CLI_VENV_REEXEC") == "1":
         return
     if "VIRTUAL_ENV" in os.environ:
         return
     if not LOCAL_VENV_PYTHON.exists():
         return
     env = dict(os.environ)
-    env["TELEGRAM_READONLY_VENV_REEXEC"] = "1"
+    env["TELEGRAM_CLI_VENV_REEXEC"] = "1"
     raise SystemExit(subprocess.call([str(LOCAL_VENV_PYTHON), __file__, *sys.argv[1:]], env=env))
 
 
 maybe_reexec_local_venv()
 
-CONFIG_DIR = Path.home() / ".config" / "telegram-readonly"
+CONFIG_DIR = Path.home() / ".config" / "telegram-cli"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+LEGACY_CONFIG_PATH = Path.home() / ".config" / "telegram-readonly" / "config.json"
+ENV_FALLBACK_PATH = SKILL_DIR / ".env"
 
 
 def eprint(*args: Any, **kwargs: Any) -> None:
@@ -51,9 +54,25 @@ def chmod_600(path: Path) -> None:
 
 
 def load_raw_config() -> dict[str, Any]:
-    if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text())
-    return {}
+    data: dict[str, Any] = {}
+    if ENV_FALLBACK_PATH.exists():
+        mapping = {
+            "TELEGRAM_API_ID": "api_id",
+            "TELEGRAM_API_HASH": "api_hash",
+            "TELEGRAM_SESSION_STRING": "session_string",
+        }
+        for raw_line in ENV_FALLBACK_PATH.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            mapped = mapping.get(key.strip())
+            if mapped:
+                data[mapped] = value.strip().strip("'").strip('"')
+    for path in (LEGACY_CONFIG_PATH, CONFIG_PATH):
+        if path.exists():
+            data.update(json.loads(path.read_text()))
+    return data
 
 
 def save_config(data: dict[str, Any]) -> None:
@@ -171,6 +190,47 @@ def message_to_dict(message: Any) -> dict[str, Any]:
     }
 
 
+def action_payload(action: str, dialog: Any, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "dry_run": True,
+        "action": action,
+        "chat": dialog_to_dict(dialog),
+    }
+    payload.update(extra)
+    return payload
+
+
+def print_dry_run_or_confirm(args: argparse.Namespace, payload: dict[str, Any]) -> bool:
+    if getattr(args, "execute", False):
+        return True
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    eprint("Dry run only. Re-run with --execute to apply this Telegram write.")
+    return False
+
+
+def parse_mute_until(args: argparse.Namespace) -> Optional[datetime]:
+    if getattr(args, "unmute", False):
+        if getattr(args, "hours", None) or getattr(args, "until", None):
+            raise SystemExit("--unmute cannot be combined with --hours or --until")
+        return None
+    if getattr(args, "until", None):
+        if getattr(args, "hours", None):
+            raise SystemExit("Use only one of --hours or --until")
+        value = args.until.strip()
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise SystemExit("--until must be ISO format, e.g. 2026-06-01T09:00:00+00:00") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    if getattr(args, "hours", None):
+        return datetime.now(timezone.utc) + timedelta(hours=args.hours)
+    return datetime(2038, 1, 1, tzinfo=timezone.utc)
+
+
 async def cmd_auth(args: argparse.Namespace) -> int:
     try:
         from telethon import TelegramClient
@@ -272,21 +332,41 @@ async def cmd_dialogs(args: argparse.Namespace) -> int:
         await client.disconnect()
 
 
-async def resolve_entity(client: Any, chat: str) -> Any:
+async def resolve_dialog(client: Any, chat: str) -> Any:
+    needle = chat.strip()
+    lowered = needle.lower()
+    dialogs = await client.get_dialogs(limit=500, archived=None)
+
+    matches = []
+    for dialog in dialogs:
+        row = dialog_to_dict(dialog)
+        if needle == str(row.get("id")):
+            return dialog
+        for candidate in (row.get("name"), row.get("title"), row.get("username")):
+            if candidate and lowered == str(candidate).lower():
+                matches.append(dialog)
+                break
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        compact = [dialog_to_dict(d) for d in matches[:10]]
+        raise SystemExit(f"Ambiguous chat: {chat}. Matches: {json.dumps(compact, ensure_ascii=False)}")
+
     try:
-        return await client.get_entity(chat)
+        entity = await client.get_entity(chat)
     except Exception as exc:
-        dialogs = await client.get_dialogs(limit=500, archived=None)
-        needle = chat.strip()
-        lowered = needle.lower()
-        for dialog in dialogs:
-            row = dialog_to_dict(dialog)
-            if needle == str(row.get("id")):
-                return dialog.entity
-            for candidate in (row.get("name"), row.get("title"), row.get("username")):
-                if candidate and lowered == str(candidate).lower():
-                    return dialog.entity
         raise SystemExit(f"Could not resolve chat/entity: {chat} ({exc})") from exc
+
+    for dialog in dialogs:
+        if dialog.entity == entity or getattr(dialog.entity, "id", None) == getattr(entity, "id", None):
+            return dialog
+    raise SystemExit(f"Resolved entity but could not find dialog metadata: {chat}")
+
+
+async def resolve_entity(client: Any, chat: str) -> Any:
+    dialog = await resolve_dialog(client, chat)
+    return dialog.entity
 
 
 async def cmd_messages(args: argparse.Namespace) -> int:
@@ -343,10 +423,142 @@ async def cmd_unread_dialogs(args: argparse.Namespace) -> int:
         await client.disconnect()
 
 
+async def cmd_send(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    client = await build_client(settings)
+    try:
+        dialog = await resolve_dialog(client, args.chat)
+        text = args.text
+        if args.text_file:
+            if args.text:
+                raise SystemExit("Use only one of --text or --text-file")
+            text = Path(args.text_file).read_text()
+        if not text:
+            raise SystemExit("send requires --text or --text-file")
+
+        payload = action_payload(
+            "send",
+            dialog,
+            text=text,
+            reply_to=args.reply_to,
+            silent=args.silent,
+        )
+        if not print_dry_run_or_confirm(args, payload):
+            return 0
+
+        sent = await client.send_message(
+            dialog.entity,
+            text,
+            reply_to=args.reply_to,
+            silent=args.silent,
+            parse_mode=None,
+        )
+        print(json.dumps({
+            "ok": True,
+            "action": "send",
+            "chat": dialog_to_dict(dialog),
+            "message": message_to_dict(sent),
+        }, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        await client.disconnect()
+
+
+async def cmd_mark_read(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    client = await build_client(settings)
+    try:
+        dialog = await resolve_dialog(client, args.chat)
+        payload = action_payload(
+            "mark-read",
+            dialog,
+            max_id=args.max_id,
+            clear_mentions=args.clear_mentions,
+            clear_reactions=args.clear_reactions,
+        )
+        if not print_dry_run_or_confirm(args, payload):
+            return 0
+
+        result = await client.send_read_acknowledge(
+            dialog.entity,
+            max_id=args.max_id or None,
+            clear_mentions=args.clear_mentions,
+            clear_reactions=args.clear_reactions,
+        )
+        print(json.dumps({
+            "ok": bool(result),
+            "action": "mark-read",
+            "chat": dialog_to_dict(dialog),
+            "max_id": args.max_id,
+        }, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        await client.disconnect()
+
+
+async def cmd_archive(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    client = await build_client(settings)
+    try:
+        dialog = await resolve_dialog(client, args.chat)
+        folder = 0 if args.unarchive else 1
+        payload = action_payload(
+            "unarchive" if args.unarchive else "archive",
+            dialog,
+            folder=folder,
+        )
+        if not print_dry_run_or_confirm(args, payload):
+            return 0
+
+        await client.edit_folder(dialog.entity, folder)
+        print(json.dumps({
+            "ok": True,
+            "action": "unarchive" if args.unarchive else "archive",
+            "chat": dialog_to_dict(dialog),
+            "folder": folder,
+        }, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        await client.disconnect()
+
+
+async def cmd_mute(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    client = await build_client(settings)
+    try:
+        from telethon.tl import functions, types
+
+        dialog = await resolve_dialog(client, args.chat)
+        mute_until = parse_mute_until(args)
+        mute_until_wire = 0 if args.unmute else int(mute_until.timestamp()) if mute_until else 0
+        payload = action_payload(
+            "unmute" if args.unmute else "mute",
+            dialog,
+            mute_until=None if args.unmute else mute_until.isoformat() if mute_until else None,
+        )
+        if not print_dry_run_or_confirm(args, payload):
+            return 0
+
+        input_peer = await client.get_input_entity(dialog.entity)
+        result = await client(functions.account.UpdateNotifySettingsRequest(
+            peer=types.InputNotifyPeer(input_peer),
+            settings=types.InputPeerNotifySettings(mute_until=mute_until_wire),
+        ))
+        print(json.dumps({
+            "ok": bool(result),
+            "action": "unmute" if args.unmute else "mute",
+            "chat": dialog_to_dict(dialog),
+            "mute_until": None if args.unmute else mute_until.isoformat() if mute_until else None,
+        }, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        await client.disconnect()
+
+
 def cmd_help(args: argparse.Namespace) -> int:
     payload = {
-        "tool": "telegram-readonly",
-        "purpose": "Read-only Telegram access for a user's personal account via Telethon/MTProto.",
+        "tool": "telegram-cli",
+        "purpose": "Guarded Telegram access for a user's personal account via Telethon/MTProto.",
         "defaults": {
             "dialogs": 50,
             "messages": 50,
@@ -356,7 +568,8 @@ def cmd_help(args: argparse.Namespace) -> int:
             "unread_scan_limit": 200,
         },
         "notes": [
-            "Read-only wrapper: no send/edit/delete/mark-read commands are exposed.",
+            "Write commands are dry-run by default and require --execute.",
+            "Do not run send --execute unless the user explicitly approved the final text and recipient.",
             "dialogs --query uses token-based matching across name, username, and title.",
             "unread-dialogs and unread-dms exclude muted and archived chats by default.",
             "Dialog output includes is_user, is_group, is_channel, is_bot, archived, muted, and unread counts.",
@@ -368,14 +581,22 @@ def cmd_help(args: argparse.Namespace) -> int:
             "search": "Search message text globally or within one chat.",
             "unread-dialogs": "List recent unread chats, excluding muted and archived by default.",
             "unread-dms": "List recent unread DM chats only, excluding muted and archived by default.",
+            "send": "Dry-run or send a message to a chat. Requires --chat and --text/--text-file.",
+            "mark-read": "Dry-run or mark a chat read, optionally up to --max-id.",
+            "archive": "Dry-run or archive/unarchive a chat.",
+            "mute": "Dry-run or mute/unmute a chat.",
             "help": "Show this command summary.",
         },
         "examples": [
-            "./scripts/telegram-readonly dialogs --query 'petros skynet'",
-            "./scripts/telegram-readonly messages --chat @suuuupaman --limit 20 --reverse",
-            "./scripts/telegram-readonly search 'btc_txid_here' --limit 20",
-            "./scripts/telegram-readonly unread-dialogs --limit 10",
-            "./scripts/telegram-readonly unread-dms --limit 10 --include-muted",
+            "./scripts/telegram-cli dialogs --query 'petros skynet'",
+            "./scripts/telegram-cli messages --chat @suuuupaman --limit 20 --reverse",
+            "./scripts/telegram-cli search 'btc_txid_here' --limit 20",
+            "./scripts/telegram-cli unread-dialogs --limit 10",
+            "./scripts/telegram-cli unread-dms --limit 10 --include-muted",
+            "./scripts/telegram-cli send --chat @username --text 'Thanks, will check.'",
+            "./scripts/telegram-cli mark-read --chat 123456789 --execute",
+            "./scripts/telegram-cli archive --chat 123456789 --execute",
+            "./scripts/telegram-cli mute --chat 123456789 --hours 8 --execute",
         ],
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -385,8 +606,8 @@ def cmd_help(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Read-only Telegram wrapper built on Telethon. "
-            "This tool intentionally exposes only read operations."
+            "Guarded Telegram wrapper built on Telethon. "
+            "Write operations are dry-run by default and require --execute."
         )
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -425,6 +646,33 @@ def build_parser() -> argparse.ArgumentParser:
     unread_dms.add_argument("--include-muted", action="store_true")
     unread_dms.add_argument("--include-archived", action="store_true")
 
+    send = sub.add_parser("send", help="Dry-run or send a Telegram message")
+    send.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
+    send.add_argument("--text", help="Message body")
+    send.add_argument("--text-file", help="Read message body from a local file")
+    send.add_argument("--reply-to", type=int, help="Optional message id to reply to")
+    send.add_argument("--silent", action="store_true", help="Send without notification")
+    send.add_argument("--execute", action="store_true", help="Actually send the message")
+
+    mark_read = sub.add_parser("mark-read", help="Dry-run or mark a chat read")
+    mark_read.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
+    mark_read.add_argument("--max-id", type=int, default=0, help="Only mark messages up to this message id")
+    mark_read.add_argument("--clear-mentions", action="store_true")
+    mark_read.add_argument("--clear-reactions", action="store_true")
+    mark_read.add_argument("--execute", action="store_true", help="Actually mark read")
+
+    archive = sub.add_parser("archive", help="Dry-run or archive/unarchive a chat")
+    archive.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
+    archive.add_argument("--unarchive", action="store_true")
+    archive.add_argument("--execute", action="store_true", help="Actually archive/unarchive")
+
+    mute = sub.add_parser("mute", help="Dry-run or mute/unmute a chat")
+    mute.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
+    mute.add_argument("--hours", type=float, help="Mute for this many hours")
+    mute.add_argument("--until", help="Mute until ISO timestamp, e.g. 2026-06-01T09:00:00+00:00")
+    mute.add_argument("--unmute", action="store_true")
+    mute.add_argument("--execute", action="store_true", help="Actually mute/unmute")
+
     sub.add_parser("help", help="Show a descriptive summary of commands, defaults, and examples")
 
     return p
@@ -447,6 +695,14 @@ async def async_main() -> int:
     if args.command == "unread-dms":
         args.only_dms = True
         return await cmd_unread_dialogs(args)
+    if args.command == "send":
+        return await cmd_send(args)
+    if args.command == "mark-read":
+        return await cmd_mark_read(args)
+    if args.command == "archive":
+        return await cmd_archive(args)
+    if args.command == "mute":
+        return await cmd_mute(args)
     if args.command == "help":
         return cmd_help(args)
     parser.error("unknown command")

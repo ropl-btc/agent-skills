@@ -14,15 +14,16 @@ Local persistent memory workflow for agents.
 - helper commands for `init`, `search`, `add`, `recent`, and related maintenance
 - best for agents that want a database-backed memory layer inside one workspace
 
-### `telegram-readonly`
+### `telegram-cli`
 
-Read-only access to a personal Telegram account via Telethon/MTProto.
+Guarded Telegram access to a personal account via Telethon/MTProto.
 
 - list dialogs
 - read recent messages from a chat
 - search messages
 - inspect unread chats and DMs
-- uses a skill-local bootstrap flow and stores auth state in `~/.config/telegram-readonly/config.json`
+- send, mark-read, archive, and mute only with explicit approval and `--execute`
+- uses a skill-local bootstrap flow and stores auth state in `~/.config/telegram-cli/config.json`
 
 ### `ddg-search`
 
@@ -60,7 +61,7 @@ Examples:
 
 - [persistent-memory](persistent-memory/SKILL.md)
 - [ddg-search](ddg-search/SKILL.md)
-- [telegram-readonly](telegram-readonly/SKILL.md)
+- [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
 
 ## Notes

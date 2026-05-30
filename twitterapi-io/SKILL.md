@@ -38,7 +38,7 @@ Primary config path:
 Recommended one-time setup:
 
 ```bash
-<skill-path>/scripts/twitterapi-io auth --api-key YOUR_KEY
+<skill-path>/scripts/setup-api-key.sh
 ```
 
 That writes the API key to the config file so later reads work without needing to source `.env`.
@@ -54,13 +54,14 @@ That writes the API key to the config file so later reads work without needing t
 ### Authenticate once
 
 ```bash
-<skill-path>/scripts/twitterapi-io auth --api-key YOUR_KEY
+<skill-path>/scripts/setup-api-key.sh
 ```
 
-You can also use env as an override or fallback:
+You can also use env as an override or fallback, or use `auth --api-key` only when command-history exposure is acceptable:
 
 ```bash
 export TWITTERAPI_IO_KEY='YOUR_KEY'
+<skill-path>/scripts/twitterapi-io auth --api-key YOUR_KEY
 ```
 
 ### Fetch one tweet
@@ -161,6 +162,7 @@ Use `--raw` when full endpoint payloads are actually needed.
 - Package repo: `https://github.com/ropl-btc/twitterapi-io-cli`
 - Launcher: `scripts/twitterapi-io`
 - Python implementation: `scripts/twitterapi_io.py`
+- Credential setup helper: `scripts/setup-api-key.sh`
 - Official docs links: `references/links.md`
 - Config storage: `~/.config/twitterapi-io/config.json`
 - `.env` is optional fallback only; it is not the preferred long-term setup.

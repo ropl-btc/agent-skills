@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
 CONFIG_DIR = Path.home() / ".config" / "twitterapi-io"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+ENV_FALLBACK_PATH = SKILL_DIR / ".env"
 BASE_URL = "https://api.twitterapi.io"
 DEFAULT_UA = "twitterapi-io-cli/0.1.0 (+https://github.com/ropl-btc/twitterapi-io-cli)"
 
@@ -22,13 +25,23 @@ def chmod_600(path: Path) -> None:
 
 
 def load_raw_config() -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    if ENV_FALLBACK_PATH.exists():
+        for raw_line in ENV_FALLBACK_PATH.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() in {"TWITTERAPI_IO_KEY", "TWITTERAPI_IO_API_KEY"}:
+                data["api_key"] = value.strip().strip("'").strip('"')
     if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text())
-    return {}
+        data.update(json.loads(CONFIG_PATH.read_text()))
+    return data
 
 
 def save_config(data: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.chmod(stat.S_IRWXU)
     CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n")
     chmod_600(CONFIG_PATH)
 
@@ -37,7 +50,7 @@ def get_api_key() -> str:
     data = load_raw_config()
     key = os.getenv("TWITTERAPI_IO_KEY") or data.get("api_key")
     if not key:
-        raise SystemExit("Missing TWITTERAPI_IO_KEY. Set the env var or run the local auth command with --api-key.")
+        raise SystemExit("Missing TWITTERAPI_IO_KEY. Set the env var or run scripts/setup-api-key.sh.")
     return key
 
 
@@ -180,12 +193,12 @@ def cmd_help(args: argparse.Namespace) -> int:
         "notes": [
             "Read-only CLI: no posting, liking, replying, deleting, or write actions are exposed.",
             "API auth uses the x-api-key header, per twitterapi.io docs.",
-            "The CLI can read TWITTERAPI_IO_KEY from env or from ~/.config/twitterapi-io/config.json after auth.",
+            "The CLI can read TWITTERAPI_IO_KEY from env, legacy .env, or ~/.config/twitterapi-io/config.json.",
             "Advanced search uses cursor pagination via next_cursor until limits or end of results.",
             "For date filters, prefer working Twitter operators like since_time:, until_time:, and within_time:.",
         ],
         "commands": {
-            "auth": "Save API key locally in ~/.config/twitterapi-io/config.json.",
+            "auth": "Save API key locally in ~/.config/twitterapi-io/config.json; prefer scripts/setup-api-key.sh for interactive setup.",
             "tweet": "Fetch one tweet by id or URL.",
             "user": "Fetch one user by username.",
             "user-tweets": "Fetch recent tweets for a user by username or user id.",
@@ -197,7 +210,7 @@ def cmd_help(args: argparse.Namespace) -> int:
             "help": "Show this command summary.",
         },
         "examples": [
-            "./scripts/twitterapi-io auth --api-key YOUR_KEY",
+            "./scripts/setup-api-key.sh",
             "./scripts/twitterapi-io tweet --url 'https://x.com/jack/status/20'",
             "./scripts/twitterapi-io user --username OpenAI",
             "./scripts/twitterapi-io user-tweets --username OpenAI --limit 10",

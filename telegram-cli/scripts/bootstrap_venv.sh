@@ -10,6 +10,10 @@ if [ ! -f "$GITIGNORE_PATH" ]; then
   cat >"$GITIGNORE_PATH" <<'EOF'
 /.venv/
 __pycache__/
+**/__pycache__/
+.env
+.env.*
+!.env.example
 EOF
 fi
 
@@ -17,4 +21,4 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
 "$VENV_DIR/bin/pip" install telethon
 
-echo "ok: telegram-readonly local venv ready at $VENV_DIR"
+echo "ok: telegram-cli local venv ready at $VENV_DIR"
