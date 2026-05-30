@@ -9,5 +9,5 @@ This is a public, reusable multi-skill repository.
 - Write skills so they work across different users, computers, and operating systems where practical.
 - Keep each skill self-contained with `SKILL.md`, optional `scripts/`, and optional `references/`.
 - For skills that need credentials or env vars, include a setup script that prompts locally and saves config under `~/.config/<skill-name>/`, like `telegram-cli/scripts/setup-api-key.sh`.
-- Keep generated state out of skill folders where practical: credentials in `~/.config/<skill-name>/`, caches and virtualenvs in `~/.cache/<skill-name>/`, and durable generated files in `~/.local/share/<skill-name>/`.
+- Keep generated state out of skill folders where practical: credentials in `~/.config/<skill-name>/config.json`, caches and virtualenvs in `~/.cache/<skill-name>/`, and durable state/certs/backups in `~/.local/share/<skill-name>/`.
 - Before every commit, check `git status --ignored --short` and confirm secrets, local config, caches, logs, virtualenvs, and generated junk are ignored and not staged.
