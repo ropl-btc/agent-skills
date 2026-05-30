@@ -2,13 +2,31 @@
 
 A small collection of practical AI agent skills.
 
-This repo is now a simple multi-skill repository: each top-level folder is a skill with its own `SKILL.md`, `scripts/`, and optional `references/` or other support files.
+Each top-level folder is a self-contained skill.
+
+## Install
+
+Install all skills globally:
+
+```bash
+npx skills add ropl-btc/agent-skills -g -y
+```
+
+Install a single skill:
+
+```bash
+npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
+```
 
 ## Skills
 
 ### `telegram-cli`
 
 Guarded Telegram access to a personal account via Telethon/MTProto.
+
+```bash
+npx skills add ropl-btc/agent-skills@telegram-cli -g -y
+```
 
 - list dialogs
 - read recent messages from a chat
@@ -21,6 +39,10 @@ Guarded Telegram access to a personal account via Telethon/MTProto.
 
 Lightweight DuckDuckGo search as a no-key fallback or second source.
 
+```bash
+npx skills add ropl-btc/agent-skills@ddg-search -g -y
+```
+
 - text, news, image, and video search
 - instant-answer lookups
 - DuckDuckGo bang resolution
@@ -30,6 +52,10 @@ Lightweight DuckDuckGo search as a no-key fallback or second source.
 
 Read-only Twitter/X data access via `twitterapi.io`.
 
+```bash
+npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
+```
+
 - fetch tweets, users, timelines, replies, quote tweets, thread context, mentions, and search results
 - local script-based skill, no global CLI required
 - stores API key in `~/.config/twitterapi-io/config.json`
@@ -37,6 +63,10 @@ Read-only Twitter/X data access via `twitterapi.io`.
 ### `markdown-to-pdf`
 
 Local Markdown-to-PDF renderer for clean text-first PDFs.
+
+```bash
+npx skills add ropl-btc/agent-skills@markdown-to-pdf -g -y
+```
 
 ## Repo Layout
 
@@ -48,11 +78,7 @@ Each skill is self-contained:
 
 Generated local state should live outside the repo where practical: credentials in `~/.config/<skill-name>/`, caches and virtualenvs in `~/.cache/<skill-name>/`, and durable generated files in `~/.local/share/<skill-name>/`.
 
-## Using A Skill
-
-Open the skill folder and follow its `SKILL.md`.
-
-Examples:
+## Skill Docs
 
 - [ddg-search](ddg-search/SKILL.md)
 - [telegram-cli](telegram-cli/SKILL.md)
