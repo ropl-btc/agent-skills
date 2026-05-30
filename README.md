@@ -6,14 +6,6 @@ This repo is now a simple multi-skill repository: each top-level folder is a ski
 
 ## Skills
 
-### `persistent-memory`
-
-Local persistent memory workflow for agents.
-
-- SQLite-backed memory storage and retrieval
-- helper commands for `init`, `search`, `add`, `recent`, and related maintenance
-- best for agents that want a database-backed memory layer inside one workspace
-
 ### `telegram-cli`
 
 Guarded Telegram access to a personal account via Telethon/MTProto.
@@ -59,7 +51,6 @@ Open the skill folder and follow its `SKILL.md`.
 
 Examples:
 
-- [persistent-memory](persistent-memory/SKILL.md)
 - [ddg-search](ddg-search/SKILL.md)
 - [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
