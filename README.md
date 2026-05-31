@@ -60,6 +60,20 @@ npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
 - local script-based skill, no global CLI required
 - stores API key in `~/.config/twitterapi-io/config.json`
 
+### `gsc-cli`
+
+Google Search Console CLI for the official Search Console API.
+
+```bash
+npx skills add ropl-btc/agent-skills@gsc-cli -g -y
+```
+
+- list Search Console properties
+- query Search Analytics performance rows
+- inspect Google's indexed status for a URL
+- list/get/submit/delete sitemaps with explicit `--execute` for writes
+- uses headless-friendly browser URL OAuth and stores tokens in `~/.config/gsc-cli/config.json`
+
 ### `markdown-to-pdf`
 
 Local Markdown-to-PDF renderer for clean text-first PDFs.
@@ -81,6 +95,7 @@ Generated local state should live outside the repo where practical: credentials 
 ## Skill Docs
 
 - [ddg-search](ddg-search/SKILL.md)
+- [gsc-cli](gsc-cli/SKILL.md)
 - [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
 - [markdown-to-pdf](markdown-to-pdf/SKILL.md)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Google Search Console CLI"
+  short_description: "Query Search Console properties, analytics, sitemaps, and URL inspection"
+  default_prompt: "Use $gsc-cli to inspect Google Search Console data, including property access, Search Analytics rows, sitemap status, and URL index status through the local CLI wrapper."
