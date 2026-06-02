@@ -82,6 +82,19 @@ Local Markdown-to-PDF renderer for clean text-first PDFs.
 npx skills add ropl-btc/agent-skills@markdown-to-pdf -g -y
 ```
 
+### `liquidium-borrow`
+
+Liquidium SDK helper for accountless instant-loan borrow flows and profile portfolio reads.
+
+```bash
+npx skills add ropl-btc/agent-skills@liquidium-borrow -g -y
+```
+
+- quote borrow capacity and Liquidium LTV/liquidation risk
+- create accountless instant-loan requests without signing or broadcasting wallet transactions
+- save local loan references under `~/.local/share/liquidium-borrow/`
+- refresh status, repayment, add-collateral, deposit detection, and activity instructions
+
 ## Repo Layout
 
 Each skill is self-contained:
@@ -99,6 +112,7 @@ Generated local state should live outside the repo where practical: credentials 
 - [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
 - [markdown-to-pdf](markdown-to-pdf/SKILL.md)
+- [liquidium-borrow](liquidium-borrow/SKILL.md)
 
 ## Notes
 

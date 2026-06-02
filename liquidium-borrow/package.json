@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@liquidium/client": "0.1.2"
+  }
+}

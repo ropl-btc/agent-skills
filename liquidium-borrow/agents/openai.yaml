@@ -1,0 +1,4 @@
+interface:
+  display_name: "Liquidium Borrow"
+  short_description: "Borrow and supply via Liquidium SDK"
+  default_prompt: "Use $liquidium-borrow to implement a headless Liquidium instant-loan borrow flow."
