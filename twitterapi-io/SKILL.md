@@ -159,7 +159,7 @@ Use `--raw` when full endpoint payloads are actually needed.
 
 ## Files
 
-- Package repo: `https://github.com/ropl-btc/twitterapi-io-cli`
+- Package repo: `https://github.com/robin-liquidium/twitterapi-io-cli`
 - Launcher: `scripts/twitterapi-io`
 - Python implementation: `scripts/twitterapi_io.py`
 - Credential setup helper: `scripts/setup-api-key.sh`

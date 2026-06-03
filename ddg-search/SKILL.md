@@ -115,7 +115,7 @@ Use `--text` when you want a readable terminal view.
 
 ## Files
 
-- Source repo: `https://github.com/ropl-btc/ddg-search-cli`
+- Source repo: `https://github.com/robin-liquidium/ddg-search-cli`
 - Launcher: `scripts/ddg-search`
 - Python implementation: `scripts/ddg_search.py`
 - Local bootstrap: `scripts/bootstrap_venv.sh`

@@ -9,13 +9,13 @@ Each top-level folder is a self-contained skill.
 Install all skills globally:
 
 ```bash
-npx skills add ropl-btc/agent-skills -g -y
+npx skills add robin-liquidium/agent-skills -g -y
 ```
 
 Install a single skill:
 
 ```bash
-npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
+npx skills add robin-liquidium/agent-skills@twitterapi-io -g -y
 ```
 
 ## Skills
@@ -25,7 +25,7 @@ npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
 Guarded Telegram access to a personal account via Telethon/MTProto.
 
 ```bash
-npx skills add ropl-btc/agent-skills@telegram-cli -g -y
+npx skills add robin-liquidium/agent-skills@telegram-cli -g -y
 ```
 
 - list dialogs
@@ -40,7 +40,7 @@ npx skills add ropl-btc/agent-skills@telegram-cli -g -y
 Lightweight DuckDuckGo search as a no-key fallback or second source.
 
 ```bash
-npx skills add ropl-btc/agent-skills@ddg-search -g -y
+npx skills add robin-liquidium/agent-skills@ddg-search -g -y
 ```
 
 - text, news, image, and video search
@@ -53,7 +53,7 @@ npx skills add ropl-btc/agent-skills@ddg-search -g -y
 Read-only Twitter/X data access via `twitterapi.io`.
 
 ```bash
-npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
+npx skills add robin-liquidium/agent-skills@twitterapi-io -g -y
 ```
 
 - fetch tweets, users, timelines, replies, quote tweets, thread context, mentions, and search results
@@ -65,7 +65,7 @@ npx skills add ropl-btc/agent-skills@twitterapi-io -g -y
 Google Search Console CLI for the official Search Console API.
 
 ```bash
-npx skills add ropl-btc/agent-skills@gsc-cli -g -y
+npx skills add robin-liquidium/agent-skills@gsc-cli -g -y
 ```
 
 - list Search Console properties
@@ -79,7 +79,7 @@ npx skills add ropl-btc/agent-skills@gsc-cli -g -y
 Local Markdown-to-PDF renderer for clean text-first PDFs.
 
 ```bash
-npx skills add ropl-btc/agent-skills@markdown-to-pdf -g -y
+npx skills add robin-liquidium/agent-skills@markdown-to-pdf -g -y
 ```
 
 ### `liquidium-borrow`
@@ -87,7 +87,7 @@ npx skills add ropl-btc/agent-skills@markdown-to-pdf -g -y
 Liquidium SDK helper for accountless instant-loan borrow flows and profile portfolio reads.
 
 ```bash
-npx skills add ropl-btc/agent-skills@liquidium-borrow -g -y
+npx skills add robin-liquidium/agent-skills@liquidium-borrow -g -y
 ```
 
 - quote borrow capacity and Liquidium LTV/liquidation risk

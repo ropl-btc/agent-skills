@@ -17,7 +17,7 @@ CONFIG_DIR = Path.home() / ".config" / "twitterapi-io"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 ENV_FALLBACK_PATH = SKILL_DIR / ".env"
 BASE_URL = "https://api.twitterapi.io"
-DEFAULT_UA = "twitterapi-io-cli/0.1.0 (+https://github.com/ropl-btc/twitterapi-io-cli)"
+DEFAULT_UA = "twitterapi-io-cli/0.1.0 (+https://github.com/robin-liquidium/twitterapi-io-cli)"
 
 
 def chmod_600(path: Path) -> None:
